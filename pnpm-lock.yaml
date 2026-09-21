@@ -140,7 +140,7 @@ importers:
         version: 2.0.1
       ws:
         specifier: ^8.18.0
-        version: 8.20.0
+        version: 8.21.1
       zod:
         specifier: ^4.1.12
         version: 4.3.6
@@ -169,6 +169,9 @@ importers:
       '@colyseus/database':
         specifier: workspace:^
         version: link:../database
+      '@electric-sql/pglite':
+        specifier: ^0.4.5
+        version: 0.4.5
       '@radix-ui/react-alert-dialog':
         specifier: ^1.1.6
         version: 1.1.15(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -620,7 +623,7 @@ importers:
         version: 6.0.3
       ws:
         specifier: ^8.19.0
-        version: 8.20.0
+        version: 8.21.1
     devDependencies:
       '@types/blessed':
         specifier: ^0.1.10
@@ -845,7 +848,7 @@ importers:
         version: 2.8.1
       ws:
         specifier: ^8.13.0
-        version: 8.20.0
+        version: 8.21.1
     devDependencies:
       '@colyseus/core':
         specifier: workspace:^
@@ -1083,7 +1086,7 @@ importers:
         version: 5.2.1
       ws:
         specifier: ^8.19.0
-        version: 8.20.0
+        version: 8.21.1
     devDependencies:
       '@colyseus/core':
         specifier: workspace:^
@@ -1866,11 +1869,11 @@ packages:
 
   '@esbuild-kit/core-utils@3.3.2':
     resolution: {integrity: sha512-sPRAnw9CdSsRmEtnsl2WXWdyquogVpB3yZ3dgwJfe8zrOzTsV7cJvmwrKVa+0ma5BoiGJ+BoqkMvawbayKUsqQ==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild-kit/esm-loader@2.6.5':
     resolution: {integrity: sha512-FxEMIkJKnodyA1OaCUoEvbYRkoZlLZ4d/eXFu9Fh8CbBBgP5EmZxrfTRyN0qpXZ4vOvqnE5YdRdcrmUUXuU+dA==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild/aix-ppc64@0.19.12':
     resolution: {integrity: sha512-bmoCYyWdEL3wDQIVbcyzRyeKLgk2WtWLTWz1ZIAZF/EGbNOwSA6ew3PftJ1PqMiOOGu0OyFMzG53L0zqIpPeNA==}
@@ -4952,6 +4955,7 @@ packages:
 
   charm@0.1.2:
     resolution: {integrity: sha512-syedaZ9cPe7r3hoQA9twWYKu5AIyCswN5+szkmPBe9ccdLrj4bYaCnLVPTLd2kgVRc7+zoX4tyPgRnFKCj5YjQ==}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
 
   check-error@1.0.3:
     resolution: {integrity: sha512-iKEoDYaRmd1mxM90a2OEfWhjsjPpYPuQ+lMYsoxB126+t8fw7ySEO48nmDg5COTjxDI65/Y2OWpeEHk3ZOe8zg==}
@@ -9287,18 +9291,6 @@ packages:
     peerDependencies:
       bufferutil: ^4.0.1
       utf-8-validate: ^5.0.2
-    peerDependenciesMeta:
-      bufferutil:
-        optional: true
-      utf-8-validate:
-        optional: true
-
-  ws@8.20.0:
-    resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
-    engines: {node: '>=10.0.0'}
-    peerDependencies:
-      bufferutil: ^4.0.1
-      utf-8-validate: '>=5.0.2'
     peerDependenciesMeta:
       bufferutil:
         optional: true
@@ -17753,8 +17745,6 @@ snapshots:
       signal-exit: 3.0.7
 
   ws@7.5.10: {}
-
-  ws@8.20.0: {}
 
   ws@8.21.1: {}
 

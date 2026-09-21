@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Authenticated, Refine } from '@refinedev/core';
 import './index.css';
-import dataProvider from '@refinedev/simple-rest';
+import { createAdminDataProvider } from './lib/data-provider';
 import routerProvider from '@refinedev/react-router';
 import { BrowserRouter, Routes, Route, Outlet, NavLink, useLocation, useParams } from 'react-router-dom';
 import axios from 'axios';
@@ -37,7 +37,9 @@ http.interceptors.request.use((config) => {
   return config;
 });
 
-const provider = dataProvider(API, http);
+// Same cookie + dev-header behavior the stock simple-rest instance had;
+// the wrapper adds relation-expand support on top of simple-rest semantics.
+const provider = createAdminDataProvider(API, http);
 
 export function App() {
   const [resources, setResources] = useState<Resource[] | null>(null);

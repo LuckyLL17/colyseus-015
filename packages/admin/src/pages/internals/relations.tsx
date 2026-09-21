@@ -84,41 +84,109 @@ export function RelatedTable({
   const targetDef = findResource(resources, relation.target);
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [cursor, setCursor] = useState<string | null>(null);
+  // Stack of past-page cursors so "previous" works under keyset pagination
+  // (cursors are opaque; there is no server-side offset to recompute from).
+  const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const [reloadToken, setReloadToken] = useState(0);
   const pageSize = 20;
 
   useEffect(() => {
+    // Reset paging state whenever the tab's identity changes — a stale
+    // cursor from one parent must never ride into a new parent fetch.
+    setPage(1); setCursor(null); setCursorStack([]); setLoadError(null);
+  }, [parentResource, parentId, relation.name]);
+
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     const start = (page - 1) * pageSize;
-    fetch(
-      `${API}/${parentResource}/${parentId}/relations/${relation.name}?_start=${start}&_end=${start + pageSize}`,
-      { credentials: 'include' },
-    )
+    // Offset pagination keeps x-total-count working for the pager; the server
+    // also accepts _cursor if a caller wants a strictly stable walk.
+    const url = `${API}/${parentResource}/${parentId}/relations/${relation.name}`
+      + `?_start=${start}&_end=${start + pageSize}`;
+    fetch(url, { credentials: 'include' })
       .then(async (r) => {
-        if (!r.ok) { return { rows: [] as any[], total: 0 }; }
+        if (cancelled) { return; }
+        if (!r.ok) {
+          // Recoverable surface: keep prior rows visible, surface a banner
+          // with a retry. Filters for this tab are fixed (parent scope), so
+          // a failure is almost always transient.
+          setLoadError((await r.text().catch(() => '')) || `request failed (${r.status})`);
+          setRows([]);
+          setTotal(0);
+          return;
+        }
         const totalHeader = r.headers.get('x-total-count');
-        return { rows: await r.json() as any[], total: totalHeader ? Number(totalHeader) : 0 };
+        const next = r.headers.get('x-next-cursor');
+        setCursor(next);
+        setRows(await r.json() as any[]);
+        setTotal(totalHeader ? Number(totalHeader) : 0);
       })
-      .then(({ rows, total }) => { setRows(rows); setTotal(total); })
-      .finally(() => setLoading(false));
-  }, [parentResource, parentId, relation.name, page]);
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setLoadError(err instanceof Error ? err.message : 'network error');
+          setRows([]);
+          setTotal(0);
+        }
+      })
+      .finally(() => { if (!cancelled) { setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [parentResource, parentId, relation.name, page, reloadToken]);
 
   if (!targetDef) { return <Empty title={`unknown target resource '${relation.target}'`} />; }
 
+  const errorBanner = loadError ? (
+    <div
+      role="alert"
+      data-testid={`relation-tab-error-${relation.name}`}
+      className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
+    >
+      <span className="flex-1 text-destructive">
+        Couldn't load {targetDef.label.toLowerCase()}: {loadError}
+      </span>
+      <button
+        type="button"
+        className="rounded border px-2 py-1 text-xs hover:bg-accent"
+        data-testid={`relation-tab-retry-${relation.name}`}
+        // Bump the reload token to re-run the fetch without losing the
+        // current page or any other state.
+        onClick={() => setReloadToken((t) => t + 1)}
+      >
+        Retry
+      </button>
+    </div>
+  ) : null;
+
   return (
-    <RelatedTableView
-      parentResource={parentResource}
-      parentId={parentId}
-      relation={relation}
-      targetDef={targetDef}
-      rows={rows}
-      loading={loading}
-      total={total}
-      page={page}
-      pageSize={pageSize}
-      onPageChange={setPage}
-    />
+    <div>
+      {errorBanner}
+      <RelatedTableView
+        parentResource={parentResource}
+        parentId={parentId}
+        relation={relation}
+        targetDef={targetDef}
+        rows={rows}
+        loading={loading && rows.length === 0}
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={(nextPage) => {
+          if (nextPage < page && cursorStack.length > 0) {
+            const prev = cursorStack[cursorStack.length - 1]!;
+            setCursorStack((s) => s.slice(0, -1));
+            setCursor(prev);
+          } else if (nextPage > page && cursor) {
+            setCursorStack((s) => [...s, cursor!]);
+          }
+          setPage(nextPage);
+        }}
+      />
+    </div>
   );
 }
 

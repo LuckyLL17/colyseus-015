@@ -5,9 +5,11 @@
  * + pass it to the handler. Each invocation is audit-logged.
  */
 import { createEndpoint, type Endpoint } from '@colyseus/core';
+import { and } from 'drizzle-orm';
 import { sqlKeyedProjection, tryAudit } from '../internal/helpers.js';
+import { liveRowsPredicate } from './relation-query.js';
 import { errorResponse, json } from '../internal/http.js';
-import { pkOrError, tableOrError, type EndpointContext } from '../internal/context.js';
+import { guard, pkOrError, tableOrError, type EndpointContext } from '../internal/context.js';
 
 export function actionEndpoint(ctx: EndpointContext): Endpoint {
   return createEndpoint(
@@ -34,14 +36,24 @@ export function actionEndpoint(ctx: EndpointContext): Endpoint {
       const body = (reqCtx.body ?? {}) as { id?: string };
       if (found.perRow) {
         if (!body.id) { return errorResponse(400, `action '${actionName}' requires an id`); }
+        // Per-row action payloads go through the SAME gates the relation
+        // results and the plain read endpoints do: per-resource RBAC ('read'
+        // — invoking an action implies seeing the row) and the live-row
+        // (soft-delete) filter. Tombstoned rows answer 404, exactly like
+        // GET /:resource/:id would.
+        const readDenied = await guard(ctx, reqCtx, 'read', resource);
+        if (readDenied) { return readDenied; }
         const r = tableOrError(ctx, resource);
         if (r instanceof Response) { return r; }
         const built = pkOrError(r.cfg, body.id);
         if (built instanceof Response) { return built; }
+        const conds = [built.where];
+        const live = liveRowsPredicate(r.table, r.cfg);
+        if (live) { conds.push(live); }
         const rows = await ctx.database.drizzle
           .select(sqlKeyedProjection(r.cfg))
           .from(r.table)
-          .where(built.where)
+          .where(conds.length === 1 ? conds[0] : and(...conds))
           .limit(1);
         if (!rows[0]) { return errorResponse(404, 'row not found'); }
         row = rows[0];

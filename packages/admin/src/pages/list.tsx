@@ -1,4 +1,5 @@
 import { useTable } from '@refinedev/core';
+import { useMemo } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Eye, Loader2, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,9 @@ import { ColumnHeader } from './internals/column-header';
 import { ActionButton, DeleteRowButton } from './internals/actions';
 import { useFkLabels } from './internals/use-fk-labels';
 import { DataCell } from './internals/data-cell';
+import { RelationFilterButton } from './internals/relation-filter';
+import { RelationQueryError, relationErrorMessage } from './internals/relation-error';
+import { queryableRelations } from '@/lib/relation-query';
 import { cn } from '@/lib/utils';
 
 export function ListPage({ resources }: { resources: Resource[] }) {
@@ -24,10 +28,37 @@ export function ListPage({ resources }: { resources: Resource[] }) {
   const def = findResource(resources, resourceName);
   const pk = def && singlePk(def);
 
+  // Embed every queryable to-one relation in the page fetch. The server
+  // serves each embed with ONE batched query (no N+1), gated by target RBAC
+  // — relations the operator can't list are silently omitted. Computed
+  // before useTable; KeyedListPage remounts the page per :resource so a
+  // static meta is correct for the component's whole lifetime.
+  const relationExpand = useMemo(
+    () => def
+      ? queryableRelations(def, resources)
+        .filter((e) => e.cardinality === 'one' && e.singlePkTarget)
+        .map((e) => e.relation.name)
+      : [],
+    [def, resources],
+  );
+
   const {
     tableQuery, current, setCurrent, pageSize,
     sorters, setSorters, filters, setFilters,
-  } = useTable({ resource: resourceName, syncWithLocation: true });
+  } = useTable({
+    resource: resourceName,
+    syncWithLocation: true,
+    meta: { relationExpand: relationExpand.length > 0 ? relationExpand : undefined },
+  });
+
+  // Whether the current URL state crosses a relation — decides whether a
+  // tableQuery failure gets the "reset relation filter" recovery (a plain
+  // direct-column failure keeps the generic empty/loading surface).
+  const hasRelationQuery = useMemo(
+    () => (filters ?? []).some((f: any) => typeof f?.field === 'string' && f.field.includes('.'))
+      || (sorters ?? []).some((s: any) => typeof s?.field === 'string' && s.field.includes('.')),
+    [filters, sorters],
+  );
 
   if (!def) { return <div data-testid="unknown">unknown resource: {resourceName}</div>; }
 
@@ -41,6 +72,23 @@ export function ListPage({ resources }: { resources: Resource[] }) {
   // FK label lookup — one batched fetch per FK column per page render.
   // Cells render the raw FK first and re-render once labels arrive.
   const fkLabels = useFkLabels(rows, def);
+
+  /**
+   * Recover from a failed relation query by dropping ONLY the
+   * relation-prefixed filters + a relation sorter. Search, direct-column
+   * filters and pagination are preserved (they live in the same URL state
+   * but don't cross a relation).
+   */
+  const resetRelationQuery = () => {
+    setFilters(
+      (filters ?? []).filter((f: any) =>
+        typeof f?.field !== 'string' || !f.field.includes('.')),
+      'replace',
+    );
+    if ((sorters ?? []).some((s: any) => typeof s?.field === 'string' && s.field.includes('.'))) {
+      setSorters([]);
+    }
+  };
 
   return (
     <Page
@@ -60,6 +108,14 @@ export function ListPage({ resources }: { resources: Resource[] }) {
               );
             }}
           />
+          <RelationFilterButton
+            resource={def}
+            allResources={resources}
+            filters={filters}
+            setFilters={setFilters}
+            sorters={sorters}
+            setSorters={setSorters}
+          />
           {toolbarActions.map((a) => (
             <ActionButton
               key={a.name}
@@ -78,6 +134,13 @@ export function ListPage({ resources }: { resources: Resource[] }) {
       }
     >
       <div data-testid={`list-${resourceName}`}>
+        {tableQuery?.isError && hasRelationQuery && (
+          <RelationQueryError
+            message={relationErrorMessage(tableQuery.error)}
+            onRetry={() => tableQuery?.refetch()}
+            onResetRelation={resetRelationQuery}
+          />
+        )}
         {tableQuery?.isLoading && rows.length === 0 ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground">
             <Loader2 className="size-4 animate-spin mr-2" /> loading…
@@ -85,12 +148,14 @@ export function ListPage({ resources }: { resources: Resource[] }) {
         ) : rows.length === 0 ? (
           <Empty
             title={
-              currentQ
-                ? `no ${def.label.toLowerCase()} matching "${currentQ}"`
-                : `no ${def.label.toLowerCase()} yet`
+              tableQuery?.isError && hasRelationQuery
+                ? `couldn't load ${def.label.toLowerCase()} for this relation`
+                : currentQ
+                  ? `no ${def.label.toLowerCase()} matching "${currentQ}"`
+                  : `no ${def.label.toLowerCase()} yet`
             }
           >
-            {!currentQ && (
+            {!currentQ && !(tableQuery?.isError && hasRelationQuery) && (
               <Button asChild size="sm">
                 <Link to={`/${resourceName}/create`}>
                   <Plus />
