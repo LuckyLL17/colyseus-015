@@ -3,11 +3,22 @@
  * via `defineAdminResource({ actions: [{ name, label, perRow, handler }] })`.
  * For perRow actions the request body must include `id`; we look the row up
  * + pass it to the handler. Each invocation is audit-logged.
+ *
+ * Permission/validation parity with the rest of the catalog:
+ *   - existence + per-resource `policies.action` gate runs through the SAME
+ *     `guard()` every CRUD endpoint uses (previously only the action's own
+ *     `roles` list was checked, so a resource policy was bypassable here);
+ *   - per-row row lookup applies the table's soft-delete predicate, so an
+ *     action can't resurrect a deleted row the list/show endpoints hide;
+ *   - the row is projected through the SAME sqlKeyedProjection every other
+ *     read uses — the handler only ever sees declared columns.
  */
 import { createEndpoint, type Endpoint } from '@colyseus/core';
+import { and } from 'drizzle-orm';
 import { sqlKeyedProjection, tryAudit } from '../internal/helpers.js';
 import { errorResponse, json } from '../internal/http.js';
-import { pkOrError, tableOrError, type EndpointContext } from '../internal/context.js';
+import { guard, pkOrError, tableOrError, type EndpointContext } from '../internal/context.js';
+import { softDeleteCondition } from './relation-query.js';
 
 export function actionEndpoint(ctx: EndpointContext): Endpoint {
   return createEndpoint(
@@ -19,9 +30,17 @@ export function actionEndpoint(ctx: EndpointContext): Endpoint {
       const found = def?.actions?.find((a) => a.name === actionName);
       if (!found) { return errorResponse(404, `unknown action '${actionName}' on '${resource}'`); }
 
+      // Same RBAC gate the CRUD list/update endpoints pass through. A
+      // per-resource policy (`policies: { action: [...] } | 'deny' |
+      // 'everyone'`) therefore applies to custom actions too.
+      const denied = await guard(ctx, reqCtx, 'action', resource);
+      if (denied) { return denied; }
+
       const userId = await ctx.resolveUserId({ getHeader: reqCtx.getHeader });
       if (ctx.enforceRbac) {
         if (!userId) { return errorResponse(401, 'not authenticated — sign in at /admin/login'); }
+        // The action's own `roles` allow-list is a NARROWER gate on top of
+        // the resource policy (e.g. an action admins run but mods can't).
         if (found.roles && found.roles.length > 0) {
           const role = await ctx.database.moderation.getRole(userId);
           if (!found.roles.includes(role)) {
@@ -38,10 +57,13 @@ export function actionEndpoint(ctx: EndpointContext): Endpoint {
         if (r instanceof Response) { return r; }
         const built = pkOrError(r.cfg, body.id);
         if (built instanceof Response) { return built; }
+        // Hide soft-deleted rows from action handlers.
+        const soft = softDeleteCondition(r.cfg);
+        const where = soft ? and(built.where, soft) : built.where;
         const rows = await ctx.database.drizzle
           .select(sqlKeyedProjection(r.cfg))
           .from(r.table)
-          .where(built.where)
+          .where(where)
           .limit(1);
         if (!rows[0]) { return errorResponse(404, 'row not found'); }
         row = rows[0];

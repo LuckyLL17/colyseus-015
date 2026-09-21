@@ -16,6 +16,16 @@ import { renderToString } from 'react-dom/server';
 // (v6 had it at `react-router-dom/server`, which v7 removed).
 import { StaticRouter } from 'react-router-dom';
 import { RelatedTableView } from '../src/pages/internals/relations';
+
+// Minimal props every render test shares — the new view is driven by
+// cursor paging (page/hasMore/onPrev/onNext) plus filter/sort state.
+const noop = () => {};
+const baseProps = {
+  loading: false, error: null, onRetry: noop,
+  page: 1, hasMore: false, onPrev: noop, onNext: noop,
+  filters: [], setFilters: noop, sorter: undefined,
+  onSortColumn: noop, onClearSort: noop,
+} as const;
 import type { Resource } from '../src/types';
 
 // Composite-PK target mirroring the framework's `cloudSaves` table —
@@ -67,11 +77,8 @@ function renderView(opts: {
         }}
         targetDef={targetDef}
         rows={opts.rows}
+        {...baseProps}
         loading={opts.loading ?? false}
-        total={opts.total ?? opts.rows.length}
-        page={1}
-        pageSize={20}
-        onPageChange={() => {}}
       />
     </StaticRouter>,
   );

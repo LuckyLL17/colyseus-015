@@ -3,7 +3,7 @@ import type { ServiceDb } from './_db.ts';
 import type { RolesTableShape } from '../types.ts';
 
 export type Role = 'admin' | 'mod' | 'user';
-export type Action = 'list' | 'read' | 'create' | 'update' | 'delete';
+export type Action = 'list' | 'read' | 'create' | 'update' | 'delete' | 'action';
 
 /**
  * Three-tier RBAC backed by a single `roles` table. Every row is
@@ -124,7 +124,10 @@ export class ModerationService<T extends RolesTableShape = RolesTableShape> {
       if (collection === 'colyseus_roles' || collection === 'roles') { return false; }
       const scopes = row?.scopes ?? [];
       if (!scopes.includes(collection)) { return false; }
-      return action === 'list' || action === 'read' || action === 'update';
+      // 'action' covers the admin panel's custom per-resource actions —
+      // mods scoped onto a collection may invoke them, the action's own
+      // `roles` allow-list can still narrow that per action.
+      return action === 'list' || action === 'read' || action === 'update' || action === 'action';
     }
 
     // role === 'user'

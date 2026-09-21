@@ -1,6 +1,6 @@
 import { useTable } from '@refinedev/core';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Eye, Loader2, Pencil, Plus } from 'lucide-react';
+import { AlertTriangle, Eye, Loader2, Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Empty } from '@/components/ui/empty';
 import { Page } from '@/components/ui/page';
@@ -16,6 +16,7 @@ import { ColumnHeader } from './internals/column-header';
 import { ActionButton, DeleteRowButton } from './internals/actions';
 import { useFkLabels } from './internals/use-fk-labels';
 import { DataCell } from './internals/data-cell';
+import { RelationQueryBar } from './internals/relation-query-bar';
 import { cn } from '@/lib/utils';
 
 export function ListPage({ resources }: { resources: Resource[] }) {
@@ -37,6 +38,14 @@ export function ListPage({ resources }: { resources: Resource[] }) {
   const currentQ = (filters?.find?.((f: any) => f.field === '_q') as any)?.value ?? '';
   const rows = (tableQuery?.data?.data ?? []) as any[];
   const total = tableQuery?.data?.total ?? 0;
+
+  // A failed list fetch is recoverable: the filter/sort state (including
+  // the relation query) is preserved, and the banner offers a retry that
+  // re-runs the exact same request. Previous rows stay on screen so the
+  // user doesn't lose their place while editing a filter that errored.
+  const errorMessage = tableQuery?.isError
+    ? ((tableQuery?.error as any)?.message ?? 'failed to load rows')
+    : null;
 
   // FK label lookup — one batched fetch per FK column per page render.
   // Cells render the raw FK first and re-render once labels arrive.
@@ -68,6 +77,14 @@ export function ListPage({ resources }: { resources: Resource[] }) {
               onComplete={() => tableQuery?.refetch()}
             />
           ))}
+          <RelationQueryBar
+            def={def}
+            resources={resources}
+            filters={filters as any}
+            setFilters={setFilters as any}
+            sorters={sorters as any}
+            setSorters={setSorters as any}
+          />
           <Button asChild size="sm">
             <Link to={`/${resourceName}/create`}>
               <Plus />
@@ -78,6 +95,26 @@ export function ListPage({ resources }: { resources: Resource[] }) {
       }
     >
       <div data-testid={`list-${resourceName}`}>
+        {errorMessage && (
+          <div
+            role="alert"
+            data-testid="list-error"
+            className="mb-3 flex items-center gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            <AlertTriangle className="size-4 shrink-0" />
+            <span className="flex-1">
+              Couldn’t load {def.label.toLowerCase()}: {errorMessage}. Your filters are still applied.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => tableQuery?.refetch()}
+              data-testid="list-error-retry"
+            >
+              Retry
+            </Button>
+          </div>
+        )}
         {tableQuery?.isLoading && rows.length === 0 ? (
           <div className="flex items-center justify-center py-10 text-muted-foreground">
             <Loader2 className="size-4 animate-spin mr-2" /> loading…

@@ -15,10 +15,8 @@
  * break the user's request.
  */
 import { createEndpoint, type Endpoint } from '@colyseus/core';
-import { and, asc, desc, like, or, sql, type SQL } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import {
-  buildFilterCondition,
-  listColumns,
   pkColumns,
   sqlKeyedProjection,
   translateBodyKeys,
@@ -26,16 +24,18 @@ import {
 } from '../internal/helpers.js';
 import { errorResponse, json } from '../internal/http.js';
 import { guard, pkOrError, tableOrError, type EndpointContext } from '../internal/context.js';
-
-const RESERVED_QUERY_KEYS = new Set(['_start', '_end', '_sort', '_order', '_q']);
+import { executeResourceList } from './list-executor.js';
 
 // ---------------------------------------------------------------------------
 // GET /admin-api/:resource — list with refine simple-rest semantics:
-//   _start / _end          → pagination
-//   _sort / _order         → sort
-//   _q                     → free-text search across text columns
-//   <col>[_op]=value       → per-column filters (eq/ne/like/gt/gte/lt/lte)
-// PK columns are always included so the UI can identify rows for /show / /edit.
+//   _start / _end   → offset pagination (refine simple-rest)
+//   _cursor / _limit → stable keyset pagination (relation-aware clients)
+//   _sort / _order  → sort (own column, or `<relation>.<column>`)
+//   _q              → free-text search across text columns
+//   _expand=<rel>   → include related rows (batched, never N+1)
+//   <col>[_op]=val  → per-column filters (eq/ne/like/gt/gte/lt/lte/in)
+//   <rel>.<col>[_op]=val → filter by a related resource's column (one hop)
+// PK columns are always included so the UI can identify rows.
 // ---------------------------------------------------------------------------
 
 export function listEndpoint(ctx: EndpointContext): Endpoint {
@@ -48,87 +48,25 @@ export function listEndpoint(ctx: EndpointContext): Endpoint {
     const { table, cfg } = r;
     const def = ctx.resources[resource];
 
-    const q = reqCtx.query ?? {};
-    const start = parseInt(q._start as string) || 0;
-    const end = parseInt(q._end as string) || start + 100;
-    const sortField = q._sort as string | undefined;
-    const sortOrder = (q._order as string)?.toUpperCase() === 'DESC' ? 'desc' : 'asc';
-    // Free-text search across text columns. ILIKE-style on pg, LIKE on
-    // sqlite (LIKE is already case-insensitive for ASCII in sqlite default).
-    const search = typeof q._q === 'string' ? q._q.trim() : '';
+    const result = await executeResourceList({
+      ctx,
+      query: (reqCtx.query ?? {}) as Record<string, any>,
+      table, cfg, def,
+      relations: ctx.database.relations[resource] ?? [],
+    });
+    if (!result.ok) { return errorResponse(result.status, result.message); }
 
-    const visibleCols = listColumns(cfg, def);
-    const projection: Record<string, any> = {};
-    for (const colName of visibleCols) {
-      const col = cfg.columns.find((c) => c.name === colName);
-      if (col) { projection[colName] = col; }
-    }
-    // Always include primary key cols so the UI can identify rows
-    for (const col of cfg.columns) {
-      if (col.primary && !(col.name in projection)) { projection[col.name] = col; }
+    // Cursor mode: no total — the client pages purely off `nextCursor`.
+    if (typeof result.nextCursor !== 'undefined') {
+      return json(result.rows, { headers: {
+        'x-next-cursor': result.nextCursor ?? '',
+        'x-page-limit': String(result.limit ?? 0),
+        'access-control-expose-headers': 'x-next-cursor, x-page-limit',
+      }});
     }
 
-    // Build the WHERE clause from (1) free-text `_q` search and (2)
-    // per-column filters sent as `?<col>[_op]=<value>`.
-    const conditions: SQL[] = [];
-
-    if (search.length > 0) {
-      const pattern = `%${search}%`;
-      const textCols = cfg.columns.filter((c) => {
-        const t = typeof c.getSQLType === 'function' ? c.getSQLType() : '';
-        return /^(text|varchar|char)/i.test(t);
-      });
-      const orConds = textCols.map((c) => like(c as any, pattern));
-      if (orConds.length > 0) {
-        const oredOpt = or(...orConds);
-        if (oredOpt) { conditions.push(oredOpt); }
-      }
-    }
-
-    // Per-column filters. Refine simple-rest serializes filters as
-    // `field=value` (eq), `field_like=value`, `field_gte=value`, etc.
-    // We accept eq/ne/like/gt/gte/lt/lte; everything else is ignored.
-    for (const [key, raw] of Object.entries(q)) {
-      if (RESERVED_QUERY_KEYS.has(key)) { continue; }
-      if (typeof raw !== 'string' || raw.length === 0) { continue; }
-      const match = key.match(/^(.+?)_(like|in|eq|ne|gt|gte|lt|lte)$/);
-      const fieldName = match ? match[1]! : key;
-      const op = match ? match[2]! : 'eq';
-      const col = cfg.columns.find((c) => c.name === fieldName);
-      if (!col) { continue; }
-      const cond = buildFilterCondition(col, op, raw);
-      if (cond) { conditions.push(cond); }
-    }
-
-    const whereClause: SQL | undefined =
-      conditions.length === 0 ? undefined :
-      conditions.length === 1 ? conditions[0]! :
-      and(...conditions);
-
-    let query = ctx.database.drizzle.select(projection).from(table).limit(end - start).offset(start) as any;
-    if (whereClause) { query = query.where(whereClause); }
-    // Apply explicit _sort first; fall back to the resource's
-    // configured `defaultSort` so insertion-order-arbitrary tables
-    // (audit log etc.) come out in a meaningful order even on the
-    // first page load. Only one wins — explicit user input takes
-    // precedence over the default.
-    const effectiveSort: { field: string; order: 'asc' | 'desc' } | null =
-      sortField ? { field: sortField, order: sortOrder } :
-      def?.list?.defaultSort ? def.list.defaultSort :
-      null;
-    if (effectiveSort) {
-      const col = cfg.columns.find((c) => c.name === effectiveSort.field);
-      if (col) { query = query.orderBy(effectiveSort.order === 'desc' ? desc(col as any) : asc(col as any)); }
-    }
-
-    const rows = await query;
-    let countQuery = ctx.database.drizzle.select({ c: sql<number>`count(*)` }).from(table) as any;
-    if (whereClause) { countQuery = countQuery.where(whereClause); }
-    const totalRows = await countQuery;
-    const total = Number(totalRows[0]?.c ?? 0);
-
-    return json(rows, { headers: {
-      'x-total-count': String(total),
+    return json(result.rows, { headers: {
+      'x-total-count': String(result.total ?? 0),
       'access-control-expose-headers': 'x-total-count',
     }});
   });
